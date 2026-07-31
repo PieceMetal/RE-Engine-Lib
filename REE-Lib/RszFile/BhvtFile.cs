@@ -563,10 +563,11 @@ namespace ReeLib.Bhvt
         public NodeID ID;
         internal int nameOffset;
 
+        private string _name = "";
         public string Name {
-            get => field;
-            set { field = value; _fullName = null; }
-        } = "";
+            get => _name;
+            set { _name = value; _fullName = null; }
+        }
 
         private string? _fullName;
         public string FullName => _fullName ??= (Parent == null ? Name : $"{Parent.FullName}.{Name}");
