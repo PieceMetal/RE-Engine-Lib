@@ -1122,7 +1122,14 @@ namespace ReeLib.Clip
             action.Do(version <= ClipVersion.RE2_DMC5, ref uknOffset);
             action.Do(ref clipInfoOffset);
             DataInterpretationException.DebugThrowIf(uknOffset != 0 && uknOffset != clipInfoOffset, "It's actually used??");
-            DataInterpretationException.DebugThrowIf(version > ClipVersion.RE2_DMC5 && speedPointOffset != hermiteDataOffset, "Speedpoint does still exist");
+            // MH Wilds still writes a non-empty speed-point region for some
+            // clips even though the newer layout normally aliases it to the
+            // Hermite region.  Treat this as a compatibility warning rather
+            // than aborting the whole MotionList; the clip reader can still
+            // use the actual key/track data that follows.
+            DataInterpretationException.DebugWarnIf(
+                version > ClipVersion.RE2_DMC5 && speedPointOffset != hermiteDataOffset,
+                "Speedpoint does still exist");
 
             action.Do(ref namesOffset);
             action.Do(ref unicodeNamesOffset);

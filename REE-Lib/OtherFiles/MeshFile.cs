@@ -2052,6 +2052,11 @@ namespace ReeLib
             for (int i = 0; i < StreamingBuffers.Count; i++)
 			{
                 var buffer = StreamingBuffers[i];
+                // The companion streaming mesh stores raw buffer data at the
+                // offsets described by StreamingInfo.Entries.  Without this
+                // seek, the first buffer is read from the file start and all
+                // submesh index spans point outside the decoded arrays.
+                handler.Seek(StreamingInfo.Entries[i].start);
                 buffer.ReadBufferData(handler, BlendShapes, MeshData?.integerFaces ?? false, ShadowMesh != null, OccluderMesh != null);
             }
 

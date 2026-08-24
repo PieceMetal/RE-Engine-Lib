@@ -21,7 +21,10 @@ namespace ReeLib.Mot
         SF6 = 603,
         RE4 = 613,
         DD2 = 698,
-        MHWILDS = 932,
+        // MH Wilds release assets use .mot.901; later builds use .mot.932.
+        // Keep both values on the same parser path.
+        MHWILDS = 901,
+        MHWILDS_Updated = 932,
         MHStories3 = 943,
         OniWS = 973,
         RE9 = 983,
@@ -1627,7 +1630,11 @@ namespace ReeLib.Mot
                         }
                     case QuaternionDecompression.LoadQuaternions16Bit:
                         {
-                            if (MotVersion >= MotVersion.MHWILDS)
+                            // Early Wilds .mot.901 / .motlist.959 keeps the
+                            // legacy little-endian 16-bit quaternion payload.
+                            // The byte-swapped payload starts with the later
+                            // .mot.932 / .motlist.992 assets.
+                            if (MotVersion >= MotVersion.MHWILDS_Updated)
                             {
                                 // byte order changed because why tf not (see: ch5800_attack.motlist.1057 1020_Flare)
                                 var data = ReadBytesAsUInt64(handler, 6);
@@ -1791,7 +1798,7 @@ namespace ReeLib.Mot
                                 (ushort)MathF.Round((quaternion.Y - unpackData[5]) / unpackData[1] * 0xFFFF),
                                 (ushort)MathF.Round((quaternion.Z - unpackData[6]) / unpackData[2] * 0xFFFF)
                             );
-                            if (MotVersion >= MotVersion.MHWILDS)
+                            if (MotVersion >= MotVersion.MHWILDS_Updated)
                             {
                                 // need to write in the right byte order
                                 handler.Write((byte)((data.Z >> 8) & 0xFF)); handler.Write((byte)data.Z);
@@ -2781,7 +2788,14 @@ namespace ReeLib
                 }
             }
 
-            if (header.clipFileOffset > 0 && header.clipCount > 0)
+            // In MH Wilds .motlist.959 assets, clipFileOffset points to
+            // auxiliary CLIP metadata whose layout is not the same as the
+            // standalone bone animation data.  The bone clips above are the
+            // animation tracks needed by the viewer/exporter; parsing this
+            // optional block causes false offset/padding failures and makes
+            // the entire MotionList look unreadable.
+            if (header.clipFileOffset > 0 && header.clipCount > 0 &&
+                !(IsMotlist && header.version >= MotVersion.MHWILDS))
             {
                 handler.Seek(header.clipFileOffset);
                 long[] clipOffset = handler.ReadArray<long>(header.clipCount);
@@ -2789,8 +2803,23 @@ namespace ReeLib
                 {
                     handler.Seek(clipOffset[i]);
                     MotClip motClip = new();
-                    motClip.Read(handler);
-                    Clips.Add(motClip);
+                    try
+                    {
+                        motClip.Read(handler);
+                        Clips.Add(motClip);
+                    }
+                    catch (Exception ex) when (
+                        IsMotlist && header.version >= MotVersion.MHWILDS)
+                    {
+                        // MH Wilds .mot.901 assets can contain an auxiliary
+                        // embedded CLIP layout that differs from the older
+                        // REE-Lib assumptions.  The actual bone animation
+                        // data (BoneClips) has already been read above and is
+                        // sufficient for playback/export.  Do not discard the
+                        // whole MOT just because this optional clip metadata
+                        // cannot be interpreted.
+                        Log.Warn($"Skipping unsupported MH Wilds auxiliary CLIP in {header.motName}: {ex.Message}");
+                    }
                 }
                 if (header.motEndClipDataOffset > 0)
                 {

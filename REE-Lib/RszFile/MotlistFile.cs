@@ -18,7 +18,11 @@ namespace ReeLib.Motlist
         SF6 = 653,
         RE4 = 663,
         DD2 = 751,
-        MHWILDS = 992,
+        // Early MH Wilds builds (including the user's extracted resources)
+        // use .motlist.959.  Later title updates use .motlist.992; both
+        // share the same structure and map to the MH Wilds parser.
+        MHWILDS = 959,
+        MHWILDS_Updated = 992,
         MHStories3 = 1004,
         OniWS = 1036,
         RE9 = 1047,
@@ -49,6 +53,7 @@ namespace ReeLib.Motlist
             MotlistVersion.RE4 => MotVersion.RE4,
             MotlistVersion.DD2 => MotVersion.DD2,
             MotlistVersion.MHWILDS => MotVersion.MHWILDS,
+            MotlistVersion.MHWILDS_Updated => MotVersion.MHWILDS_Updated,
             MotlistVersion.MHStories3 => MotVersion.MHStories3,
             MotlistVersion.OniWS => MotVersion.OniWS,
             MotlistVersion.Pragmata => MotVersion.Pragmata,
@@ -67,7 +72,7 @@ namespace ReeLib.Motlist
             MotlistVersion.SF6 => MotTreeVersion.RE4,
             MotlistVersion.RE4 => MotTreeVersion.RE4,
             MotlistVersion.DD2 => MotTreeVersion.DD2,
-            MotlistVersion.MHWILDS => MotTreeVersion.DD2,
+            MotlistVersion.MHWILDS or MotlistVersion.MHWILDS_Updated => MotTreeVersion.DD2,
             MotlistVersion.MHStories3 => MotTreeVersion.DD2,
             MotlistVersion.OniWS => MotTreeVersion.OniWS,
             MotlistVersion.RE9 => MotTreeVersion.Pragmata,
@@ -397,6 +402,12 @@ namespace ReeLib
                 }
             }
 
+            // MH Wilds .motlist.959 override clips are auxiliary CLIP
+            // records.  They are not required for the primary bone motion
+            // tracks and currently use a layout that differs from the
+            // generic MotClip reader.  Skip them so valid BoneClips remain
+            // available to the animation viewer.
+            if (Header.version < MotlistVersion.MHWILDS)
             foreach (var motIndex in Motions)
             {
                 if (motIndex.overrideClipOffset > 0 && motIndex.overrideClipCount > 0)
