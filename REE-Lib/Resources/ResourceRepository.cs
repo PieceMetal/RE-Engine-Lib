@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Reflection;
 using System.Text.Json;
 using ReeLib.Common;
 
@@ -169,7 +167,10 @@ public class ResourceRepository
     private static HttpResponseMessage Fetch(string url)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("User-Agent", $"{AppDomain.CurrentDomain.FriendlyName}/{FileVersionInfo.GetVersionInfo(Assembly.GetExecutingAssembly().Location).ProductVersion ?? "x"}");
+        // Bundled assemblies have an empty Location in single-file applications.
+        // Read assembly metadata directly and use a stable HTTP product token.
+        var version = typeof(ResourceRepository).Assembly.GetName().Version?.ToString() ?? "0.0.0";
+        request.Headers.UserAgent.ParseAdd($"REE-Lib/{version}");
         if (!AllowThreadedFetch) {
             var http = new HttpClient();
             return http.Send(request);
