@@ -2254,6 +2254,9 @@ namespace ReeLib
 					// additional buffers are only used for the extra meshes
 					if (ShadowMesh != null) {
 						foreach (var lod in ShadowMesh.LODs) {
+							// Shared shadow LODs are the main LOD objects; keep their main buffer.
+							// Kunitsu-Gami also has auxiliary buffers, which must not replace it.
+							if (MeshData?.LODs.Contains(lod) == true) continue;
 							foreach (var grp in lod.MeshGroups) {
 								foreach (var sub in grp.Submeshes) {
 									sub.Buffer = MeshBuffer.AdditionalBuffers.First();

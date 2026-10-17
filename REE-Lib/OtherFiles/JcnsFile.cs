@@ -295,7 +295,8 @@ namespace ReeLib.Jcns
         {
             handler.Read(ref complexMappingInfoOffset);
             jointName = handler.ReadOffsetWString();
-            handler.Read(ref joint.hashIndex); // TODO <35 version
+            if (handler.FileVersion >= 35) handler.Read(ref joint.hashIndex);
+            else handler.Read(ref joint.hash);
             var complexMapCount = handler.Read<short>();
             handler.Read(ref uknShort1);
             handler.Read(ref uknByte1);
@@ -387,8 +388,10 @@ namespace ReeLib.Jcns
                 handler.Read(ref hashObject.hashIndex);
             }
             handler.Read(ref hashObject.hash);
-            if (handler.FileVersion > 12) {
+            if (handler.FileVersion >= 35) {
                 handler.Read(ref propertyHash.hashIndex);
+            } else if (handler.FileVersion > 12) {
+                handler.Read(ref propertyHash.hash);
             } else {
                 handler.Read(ref uknUint);
             }
@@ -434,6 +437,7 @@ namespace ReeLib.Jcns
 
         private void ReadData(FileHandler handler, byte driverCount, byte sourceCount)
         {
+            using var restore = handler.SeekJumpBack(handler.Tell());
             handler.Seek(coneDriversOffset);
             ConeDrivers.Read(handler, (int)driverCount);
             handler.Seek(sourcesOffset);
@@ -593,6 +597,26 @@ namespace ReeLib
             }
         }
 
+        /// <summary>Read standalone scalar range constraints without evaluating unsupported JCNS sections.</summary>
+        public bool TryReadRangeConstraints()
+        {
+            var handler = FileHandler;
+            handler.Seek(0);
+            Header.Read(handler);
+            if (Header.magic != Magic) throw new InvalidDataException("Invalid JCNS magic");
+            handler.Seek(Header.infoTableOffset);
+            InfoTable.version = Header.version;
+            InfoTable.Read(handler);
+            if ((int)Header.version != 26 || InfoTable.coneDriverCount != 0 ||
+                InfoTable.rotExpressionCount != 0 || InfoTable.skinConstraintCount != 0 ||
+                InfoTable.aimConstraintCount != 0 || InfoTable.materialConstraintCount != 0 ||
+                InfoTable.objectSettingCount != 0 || InfoTable.jointExportGraphInfoOffset != 0)
+                return false;
+            handler.Seek(InfoTable.constraintInfoOffset);
+            Constraints.Clear();
+            Constraints.Read(handler, InfoTable.constraintCount);
+            return true;
+        }
         protected override bool DoRead()
         {
             var handler = FileHandler;
