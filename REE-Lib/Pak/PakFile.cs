@@ -46,7 +46,8 @@ namespace ReeLib.Pak
         EncryptEntryList = 8,
         ExtraInteger = 16,
         HasChunkContentTable = 32,
-        KnownFlags = ExtraData|EncryptEntryList|ExtraInteger|HasChunkContentTable,
+        HasExtendedChunkContentTable = 64,
+        KnownFlags = ExtraData|EncryptEntryList|ExtraInteger|HasChunkContentTable|HasExtendedChunkContentTable,
     }
 
     public class PakEntry
@@ -209,7 +210,7 @@ namespace ReeLib.Pak
             return outBytes;
         }
 
-        public static void DecryptPakEntryData(byte[] buffer, Span<byte> key)
+        public static void DecryptPakEntryData(Span<byte> buffer, Span<byte> key)
         {
             Encryption.DecryptKey(key);
             if (key.Length > 0)
@@ -297,7 +298,7 @@ namespace ReeLib
 
         public void ReadContents(Stream stream, Dictionary<ulong, string>? expectedPaths = null)
         {
-            stream.Read(MemoryUtils.StructureAsBytes(ref Header));
+            stream.ReadExactly(MemoryUtils.StructureAsBytes(ref Header));
 
             if (Header.magic != Magic)
             {
@@ -316,85 +317,107 @@ namespace ReeLib
             }
 
             Entries.Clear();
+            ChunkEntries = null;
             if (Header.fileCount == 0) return;
 
             var entrySize = EntryHeaderSize;
             var entryListDataSize = Header.fileCount * entrySize;
             var entryTable = ArrayPool<byte>.Shared.Rent(entryListDataSize);
-            stream.Read(entryTable, 0, entryListDataSize);
-
-            if ((Header.featureFlags & PakFeatureFlags.ExtraInteger) != 0)
+            try
             {
-                stream.Seek(4, SeekOrigin.Current);
-            }
+                stream.ReadExactly(entryTable, 0, entryListDataSize);
 
-            if ((Header.featureFlags & PakFeatureFlags.ExtraData) != 0)
-            {
-                stream.Seek(9, SeekOrigin.Current);
-            }
-
-            if (Header.featureFlags != 0)
-            {
-                byte[] key = ArrayPool<byte>.Shared.Rent(128);
-                stream.ReadExactly(key, 0, 128);
-                Encryption.DecryptPakEntryData(entryTable, key);
-                ArrayPool<byte>.Shared.Return(key);
-            }
-
-            if ((Header.featureFlags & PakFeatureFlags.HasChunkContentTable) != 0)
-            {
-                ChunkEntries ??= new();
-                int chunkCount = 0;
-                stream.Read(MemoryUtils.StructureAsBytes(ref ChunkEntries.blockSize));
-                stream.Read(MemoryUtils.StructureAsBytes(ref chunkCount));
-                ChunkEntries.chunks = new PakChunkEntry[chunkCount];
-                stream.Read(MemoryMarshal.AsBytes((Span<PakChunkEntry>)ChunkEntries.chunks));
-            }
-
-            using var reader = new MemoryStream(entryTable);
-            var entryHandler = new FileHandler(reader);
-            if (Header.majorVersion == 4)
-            {
-                for (int i = 0; i < Header.fileCount; ++i)
+                if ((Header.featureFlags & PakFeatureFlags.ExtraInteger) != 0)
                 {
-                    var entry = new PakEntry();
-                    entry.ReadVer4(entryHandler);
-                    if (expectedPaths != null)
-                    {
-                        if (expectedPaths.TryGetValue(entry.CombinedHash, out var path))
-                        {
-                            entry.path = path;
-                        }
-                        else if (!IncludeUnknowns)
-                        {
-                            continue;
-                        }
-                    }
-                    Entries.Add(entry);
+                    stream.Seek(4, SeekOrigin.Current);
                 }
-            }
-            else if (Header.majorVersion == 2)
-            {
-                for (int i = 0; i < Header.fileCount; ++i)
-                {
-                    var entry = new PakEntry();
-                    entry.ReadVer2(entryHandler);
-                    if (expectedPaths != null)
-                    {
-                        if (expectedPaths.TryGetValue(entry.CombinedHash, out var path))
-                        {
-                            entry.path = path;
-                        }
-                        else if (!IncludeUnknowns)
-                        {
-                            continue;
-                        }
-                    }
-                    Entries.Add(entry);
-                }
-            }
 
-            ArrayPool<byte>.Shared.Return(entryTable);
+                if ((Header.featureFlags & PakFeatureFlags.ExtraData) != 0)
+                {
+                    stream.Seek(9, SeekOrigin.Current);
+                }
+
+                // DD2 0x68 adds a count/reserved header followed by 16-byte records
+                // (offset, attributes, hash) before the RSA key. The ordinary chunk
+                // table after the key remains authoritative for resource reads.
+                if ((Header.featureFlags & PakFeatureFlags.HasExtendedChunkContentTable) != 0)
+                {
+                    Span<byte> extendedHeader = stackalloc byte[8];
+                    stream.ReadExactly(extendedHeader);
+                    var count = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(extendedHeader);
+                    var size = (long)count * 16;
+                    if (count < 0 || size > stream.Length - stream.Position - 128)
+                        throw new InvalidDataException("Invalid extended PAK chunk table size");
+                    stream.Seek(size, SeekOrigin.Current);
+                }
+
+                if ((Header.featureFlags & PakFeatureFlags.EncryptEntryList) != 0)
+                {
+                    byte[] key = new byte[128];
+                    stream.ReadExactly(key, 0, 128);
+                    Encryption.DecryptPakEntryData(entryTable.AsSpan(0, entryListDataSize), key);
+                }
+
+                if ((Header.featureFlags & PakFeatureFlags.HasChunkContentTable) != 0)
+                {
+                    ChunkEntries ??= new();
+                    int chunkCount = 0;
+                    stream.ReadExactly(MemoryUtils.StructureAsBytes(ref ChunkEntries.blockSize));
+                    stream.ReadExactly(MemoryUtils.StructureAsBytes(ref chunkCount));
+                    if (ChunkEntries.blockSize <= 0 || chunkCount < 0 || (long)chunkCount * 8 > stream.Length - stream.Position)
+                        throw new InvalidDataException("Invalid PAK chunk table size");
+                    ChunkEntries.chunks = new PakChunkEntry[chunkCount];
+                    stream.ReadExactly(MemoryMarshal.AsBytes((Span<PakChunkEntry>)ChunkEntries.chunks));
+                }
+
+                using var reader = new MemoryStream(entryTable);
+                var entryHandler = new FileHandler(reader);
+                if (Header.majorVersion == 4)
+                {
+                    for (int i = 0; i < Header.fileCount; ++i)
+                    {
+                        var entry = new PakEntry();
+                        entry.ReadVer4(entryHandler);
+                        if (expectedPaths != null)
+                        {
+                            if (expectedPaths.TryGetValue(entry.CombinedHash, out var path))
+                            {
+                                entry.path = path;
+                            }
+                            else if (!IncludeUnknowns)
+                            {
+                                continue;
+                            }
+                        }
+                        Entries.Add(entry);
+                    }
+                }
+                else if (Header.majorVersion == 2)
+                {
+                    for (int i = 0; i < Header.fileCount; ++i)
+                    {
+                        var entry = new PakEntry();
+                        entry.ReadVer2(entryHandler);
+                        if (expectedPaths != null)
+                        {
+                            if (expectedPaths.TryGetValue(entry.CombinedHash, out var path))
+                            {
+                                entry.path = path;
+                            }
+                            else if (!IncludeUnknowns)
+                            {
+                                continue;
+                            }
+                        }
+                        Entries.Add(entry);
+                    }
+                }
+
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(entryTable);
+            }
         }
 
         public void Read<TStream>(PakEntry entry, TStream outStream) where TStream : Stream
@@ -413,32 +436,41 @@ namespace ReeLib
                 var chunkIndex = (int)entry.offset;
                 var blockSize = ChunkEntries.blockSize;
                 var remainingSize = (int)entry.decompressedSize;
+                var outputStart = outStream.Position;
                 var chunkBytes = ArrayPool<byte>.Shared.Rent(blockSize);
-
-                while (remainingSize > 0)
+                try
                 {
-                    var chunk = ChunkEntries!.chunks[chunkIndex];
-                    var overflow = chunk.attributes & 0b1111111111;
-                    var compressedSize = (int)(chunk.attributes >> 10);
-                    readStream.Seek(chunk.offset + 0x100000000L * overflow, SeekOrigin.Begin);
-                    readStream.ReadExactly(chunkBytes, 0, compressedSize);
-
-                    if (compressedSize == blockSize)
+                    while (remainingSize > 0)
                     {
-                        outStream.Write(chunkBytes, 0, compressedSize);
-                        remainingSize -= compressedSize;
-                    }
-                    else
-                    {
-                        var start = outStream.Position;
-                        Compression.DecompressZstd(chunkBytes, compressedSize, outStream);
-                        remainingSize -= (int)(outStream.Position - start);
+                        var chunk = ChunkEntries!.chunks[chunkIndex];
+                        var overflow = chunk.attributes & 0b1111111111;
+                        var compressedSize = (int)(chunk.attributes >> 10);
+                        readStream.Seek(chunk.offset + 0x100000000L * overflow, SeekOrigin.Begin);
+                        readStream.ReadExactly(chunkBytes, 0, compressedSize);
+
+                        if (compressedSize == blockSize)
+                        {
+                            outStream.Write(chunkBytes, 0, compressedSize);
+                            remainingSize -= compressedSize;
+                        }
+                        else
+                        {
+                            var start = outStream.Position;
+                            Compression.DecompressZstd(chunkBytes, compressedSize, outStream);
+                            remainingSize -= (int)(outStream.Position - start);
+                        }
+
+                        chunkIndex++;
                     }
 
-                    chunkIndex++;
+                    // The last shared block can contain padding or another resource.
+                    outStream.SetLength(outputStart + entry.decompressedSize);
+                    outStream.Position = outputStart + entry.decompressedSize;
                 }
-
-                ArrayPool<byte>.Shared.Return(chunkBytes);
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(chunkBytes);
+                }
                 return;
             }
 

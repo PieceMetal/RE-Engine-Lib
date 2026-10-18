@@ -22,6 +22,7 @@ namespace ReeLib.Mesh
 		DD2,
 		Onimusha,
 		MHWILDS,
+		DD2_2026, // MHWilds-era layout, but retains eight byte-sized skin indices.
 		Pragmata,
 		RE9, // TODO add a better separator for 6/8 weights, pragmata and re9 formats are identical part from that
 	}
@@ -1954,6 +1955,7 @@ namespace ReeLib
 			{ "RE4", new (220822879, 221108797, MeshSerializerVersion.RE4, [GameName.re4]) },
 			{ "SF6", new (220705151, 230110883, MeshSerializerVersion.SF6, [GameName.sf6]) },
 			{ "DD2", new (230517984, 240423143, MeshSerializerVersion.DD2, [GameName.dd2]) },
+			{ "DD2 2026", new (251205828, 260421070, MeshSerializerVersion.DD2_2026, [GameName.dd2]) },
 			{ "DD2 old", new (230517984, 231011879, MeshSerializerVersion.DD2_Old, [GameName.dd2]) },
 			{ "Kunitsu-Gami", new (230727984, 240306278, MeshSerializerVersion.DD2_Old, [GameName.kunitsu]) },
 
